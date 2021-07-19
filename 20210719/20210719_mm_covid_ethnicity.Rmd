@@ -1,0 +1,71 @@
+---
+title: "Makeover Monday - ONS Covid Ethnicity data"
+output: html_notebook
+---
+
+```{r}
+library("httr")
+library("readxl")
+library("tidyverse")
+library("ggdist")
+library("distributional")
+
+source("../makeover_monday_functions.R")
+sysfonts::font_add_google("Lato", "Lato")
+
+```
+
+
+```{r}
+GET("https://query.data.world/s/v32sjc4huvuevkorlrvbdcojxxr6jl", write_disk(tf <- tempfile(fileext = ".xlsx")))
+df <- read_excel(tf) %>% 
+  janitor::clean_names()
+```
+
+```{r fig.width= 9.843, fig.asp=0.3}
+plotting_df <- df %>% 
+  filter(ethnic_group != "White (baseline)") %>% 
+  filter(measure == "Average")
+
+
+sims_uncertainty <- function(n, m ,s){
+  rnorm(n, m, s)
+}
+
+plotting_df <- plotting_df %>% 
+  mutate(sd = (value - lower) / 2,
+         num_sims = 1000) %>% 
+  rename(mean = value)# %>% 
+  # mutate(data = pmap(list(n = num_sims, m = mean, s = sd), sims_uncertainty)) %>% 
+  # unnest(data)
+
+# %>% 
+#   mutate(num_sims = 1000,
+#          sim_data = map_df(.data, ~rnorm(num_sims, mean, sd)))
+
+showtext::showtext.auto()
+
+plotting_df %>% 
+  ggplot(aes(y = fct_reorder(ethnic_group, mean))) +
+  stat_dist_gradientinterval(aes(dist = dist_normal(mean, sd), fill = sex), 
+                             show_interval = TRUE, position = "dodge",
+                             #slab_fill = "red",
+                             point_colour = "black",
+                              fill_type = "gradient", point_size = 3, show_interval = FALSE, .width = 0)+
+  
+  scale_slab_alpha_continuous(range = c(0,3))+
+  scale_fill_manual(values = c("#7365AC", "#f27e58")) +
+  
+  #geom_point(aes(mean)) +
+  facet_wrap(~sex) +
+  explanatory_theme_2() +
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.major.x = element_line()) +
+  
+  guides(fill = FALSE)
+
+showtext::showtext.auto(FALSE)
+
+ggsave("covid_ethnicity.svg")
+```
+
