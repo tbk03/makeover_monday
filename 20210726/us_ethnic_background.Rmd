@@ -1,0 +1,129 @@
+---
+title: "USA: Ethnic Backgrounds"
+output: html_notebook
+---
+
+```{r}
+library(tidycensus)
+library(tidyverse)
+library(readxl)
+library(sf)
+```
+
+```{r}
+# Make over Monday data
+backgrounds <- read_xlsx("US Population by Race.xlsx") %>% 
+  janitor::clean_names()
+
+# US census population data
+populations <- read_xlsx("nst-est2019-01.xlsx", skip = 3) %>% 
+  slice(-c(1:5)) %>% 
+  slice(-c(54:nrow(.))) %>% 
+  na.omit() %>% 
+  rename(state = ...1) %>% 
+  mutate(state = str_replace(state, ".", "")) %>% 
+  janitor::clean_names() %>% 
+  select(state, census, x2019)
+
+# us state shape files
+state_sf <- state_laea %>% 
+  janitor::clean_names()
+
+states_lookup <- fips_codes %>% 
+  distinct(state, state_code, state_name) %>% 
+  rename(state_ab = state,
+         geoid = state_code,
+         state = state_name)
+
+state_sf_w_names <- state_sf %>% 
+  left_join(states_lookup)
+
+# join the three data sets and tidy things up a bit
+df_spatial <- state_sf_w_names %>% 
+  left_join(backgrounds) %>% 
+  left_join(populations) %>% 
+  rename(pop_census = census, 
+         pop_2019 = x2019) %>% 
+  gather(key = "ethnicity", value = "prop_pop",
+         white:native_hawaiian_other_pacific_islander) %>% 
+  
+  mutate(pop_by_ethnicity = round(prop_pop * pop_census, 0))
+  
+```
+For this approach to sampling variables need to be in a wide format
+
+```{r}
+# multivariant sampling of points within a geospaitial polygon
+
+sample_points <- function(df, num_points, nm){
+  
+  # samples points (for different ethnicity) within a given shape (df contains geometries)
+  
+  st_sample(df, size = num_points, type = "random") %>% 
+    
+    # convert list of points produced by st_sample
+    as_tibble() %>%   
+    # so, I can add in ethnicity associated with each point
+    mutate(ethnicity = nm) %>% 
+    # convert to sf object to make plotting easier later on
+    st_as_sf()
+}
+
+sample_points_for_state <- function(df_spatial, state_name, scaling_fac){
+  
+  print(str_c("sampling ", state_name))
+  
+  df_spatial_wide_state <- df_spatial %>% 
+    filter(state == state_name) %>% 
+    select(-c(pop_census, pop_2019, prop_pop)) %>% 
+    spread(key = ethnicity, value = pop_by_ethnicity) %>% 
+    
+    # deal with NAs in some columns 
+    mutate(across(where(is.numeric), ~replace_na(.x,0)))
+  
+  
+  num_dots <- as.data.frame(df_spatial_wide_state) %>% 
+    select(american_indian_alaska_native:white) %>% 
+    mutate(across(.fns = ~ round(./scaling_fac)))
+  
+  map_df(names(num_dots), ~ sample_points(df_spatial_wide_state, num_dots[,.x], .x)) %>% 
+    # once map_df binds rows randomise order to avoid bias in plotting order
+    slice(sample(1:n()))
+}
+
+points_for_plotting <- select(df_spatial, state) %>%
+  # filter(state == "Arizona") %>% 
+  st_drop_geometry() %>% 
+  distinct(state) %>%
+  mutate(points = map(state, ~sample_points_for_state(df_spatial, .x, 1e4)))
+
+#sample_points_for_state(df_spatial, "Arizona", 1e6) 
+
+# save and reload points
+saveRDS(points_for_plotting, file = "points_for_plotting.rds")
+pts <- readRDS(file = "points_for_plotting.rds") # just testing as hadn't used the method before
+
+unnest(pts, points) %>% 
+  st_as_sf() %>% 
+  filter(ethnicity != "white") %>% 
+  # mutate(white = if_else(ethnicity == "white", "white", "other")) %>% 
+  #slice(1:100) %>% 
+  ggplot()  +
+  geom_sf(data = state_sf, colour = "grey80", fill = "grey90") +
+  geom_sf(aes(colour = ethnicity), alpha = 0.3, size = 0.5) +
+  scale_colour_viridis_d(option = "magma", end = 0.8) +
+  #scale_alpha_manual(values = c("other" = 0.4, "white" = 0.3)) +
+  ggthemes::theme_map() +
+  theme(plot.background = element_rect(fill = "grey95"))
+  # theme_minimal() +
+  # facet_wrap(~ethnicity)
+
+
+ggsave("ethnicity_map.svg", width = 10, height = 5)
+
+```
+
+```{r}
+while (!is.null(dev.list()))  dev.off()
+```
+
