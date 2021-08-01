@@ -1,0 +1,358 @@
+---
+title: "Makeover Monday: 2021, W31- Bike Collisions in London (2005-2019)"
+author: "Dr. Chris J. Martin"
+date: "`r format(Sys.time(), '%a %d %B, %Y')`"
+output: html_document 
+---
+
+## Set up
+
+```{r, setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+# this is for rendering custom fonts in markdown
+# but it doesn;t appear to be working ...
+
+ragg_png_wrapper = function(..., res = 150) {
+  ragg::agg_png(..., res = res, units = "in")
+}
+
+knitr::opts_chunk$set(dev = ragg_png_wrapper)
+```
+
+```{r}
+library(tidyverse)
+
+library(ggtext)     # improved text rendering for ggplot2
+library(ggforce)    # extra functionality for ggplot2 inc. improved annotation
+library(patchwork)  # composing layouts with multiple plots
+library(ggdist)     # visualising uncertainty and distributions
+library(readxl)     # for reading Excel files
+library(lubridate)  # for dates
+
+# packages for using custom fonts
+library(systemfonts)
+library(textshaping)
+
+library(cjmr)       # my own package including default styling for plots
+
+# set default theme for exploratory plots
+theme_set(theme_light())
+```
+
+## Source of info on common ggplot2 tasks
+
+-   A short and general reference to common tasks at the BBC: <https://bbc.github.io/rcookbook/>
+
+-   ggplot2 wizardry by Cédric Scherer - <https://z3tt.github.io/OutlierConf2021/>
+
+-   R Graphics Cookbook by W. Chang - <https://r-graphics.org/>
+
+-   Custom fonts - <https://yjunechoe.github.io/posts/2021-06-24-setting-up-and-debugging-custom-fonts/>
+
+## Useful code snippets
+
+[Changing the size of a legend](https://z3tt.github.io/OutlierConf2021/#legend-design) - Cédric Scherer
+
+```{r, eval=FALSE}
+guides(color = guide_colorbar(title.position = "top", 
+                                title.hjust = .5, 
+                                barwidth = unit(20, "lines"), 
+                                barheight = unit(.5, "lines")))
+
+```
+
+[Changing margins](https://z3tt.github.io/OutlierConf2021/#white-space) - Cédric Scherer
+
+```{r, eval=FALSE}
+theme(plot.margin = margin(t = 25, r = 25, b = 10, l = 25))) # top, right, bottom, left
+```
+
+Adjusting axis
+
+```{r, eval=FALSE}
+scale_y_continuous(breaks = seq(0,350, 50), # labels
+                   limits = c(0, 350)) # extent of axis
+```
+
+## Colour palettes
+
+## Remember it is an iterative process
+
+## Import data
+
+```{r}
+bike_collisions_source <- read_xlsx(str_c(getwd(),"/Bike Collisions.xlsx")) %>% 
+  janitor::clean_names()
+
+bike_collisions_source
+```
+
+## Clean data
+
+```{r}
+# the casualities variable contains multiple pieces of data
+# so this needs cleaning up a little ...
+
+# check the largest number of casualities in the dataset
+max_num_casualities <- max(bike_collisions_source$number_of_casualties)
+max_num_casualities
+
+# so there can be up to 6 casualities, but it turns out only up to three
+# idnetified in the casualities column
+
+bc_clean_1 <- bike_collisions_source %>% 
+  separate(casualties,
+           into = c("c1", "c2", "c3"),
+           sep = ",")
+
+bc_clean_1
+```
+
+Taking of look at missing data .... The only missing data is in columns created in the clean process and missing values would be expected here. Otherwise everything looks nice and complete.
+
+```{r}
+bc_clean_1 %>% 
+  visdat::vis_miss()
+
+bc_clean_1 %>% 
+  skimr::skim()
+
+bike_collisions_clean <- bc_clean_1
+```
+
+## Explore data
+
+There is an increasing trend in number of bike collisions per year reported 2014. Then a fall and things look pretty flat.
+
+A pretty clear trend that there are more accidents in the Summer, presumably because there are more people cycling in the Summer. It is possible that there might be more accidents report per km cycled in the Winter months?
+
+There also appears to be a daily cycle with accident peaks during rush hours. And, a pattern over the week with more accidents during the typical working week, with the largest numbers of accidents mid week (when I think commuting is likely to be highest).
+
+```{r}
+# look at number of collisions per year
+lubridate::year(bike_collisions_clean$date) %>% 
+  as_tibble() %>% 
+  
+  ggplot() +
+  geom_histogram(aes(value))
+
+# look at number of collisions by month
+lubridate::month(bike_collisions_clean$date, label = TRUE) %>% 
+  as_tibble() %>% 
+  ggplot() +
+  geom_histogram(aes(value), stat = "count")
+
+# look at number of collisions by hour
+lubridate::hour(bike_collisions_clean$date) %>% 
+  as_tibble() %>% 
+  ggplot() +
+  geom_histogram(aes(value), stat = "count")
+
+# look at number of collisions by weekday
+lubridate::wday(bike_collisions_clean$date, label = TRUE) %>% 
+  as_tibble() %>% 
+  ggplot() +
+  geom_histogram(aes(value), stat = "count")
+```
+
+Approx. 0.33 percent of accidents reported were fatal ...
+
+```{r}
+collision_counts <- bike_collisions_clean %>% 
+  count(severity) %>% 
+  mutate(prop = n / (sum(n)))
+
+collision_counts
+
+collision_counts %>% 
+  ggplot() + geom_col(aes(severity, n))
+```
+
+Looks (very roughly) like more accidents in central London and less accidents in outer London ...
+
+```{r}
+# look at which Boroughs the most and least accidents occur in ...
+most_accidents <- bike_collisions_clean %>% 
+  count(borough) %>% 
+  slice_max(order_by = n, n = 10)
+
+most_accidents
+
+least_accidents <- bike_collisions_clean %>% 
+  count(borough) %>% 
+  slice_min(order_by = n, n = 10)
+
+least_accidents
+  
+```
+
+Looks like almost all accidents involve two vehicles (a bike and a motor vehicle presumably) and result in one causality (likely the cyclist)
+
+```{r}
+# look at the number of vehicles and casualties involved
+bike_collisions_clean %>% 
+  ggplot() + geom_histogram(aes(number_of_casualties))
+
+bike_collisions_clean %>% 
+  ggplot() + geom_histogram(aes(number_of_vehicles))
+```
+
+As expected, almost all accidents result in the cyclist being listed as a casualty.
+
+```{r}
+bike_collisions_clean %>% 
+  pivot_longer(cols = c1:c3, 
+               names_to = "cas_num", 
+               values_to = "cas_type") %>% 
+  filter(!is.na(cas_type)) %>% 
+  
+  ggplot() + geom_histogram(aes(cas_type), stat="count") +
+  coord_flip()
+```
+
+## Explore the context of the data
+
+**Who collected the data?**
+
+Original collected DfT and the Police, plotted by Cycle Streets (a non-profit which promotes cycling in the UK).
+
+**Why was the data collected?**
+
+There is a legal requirement for Road Traffic Accidents (including those involving cycling) to be reported to the Police.
+
+**What is the data used for?**
+
+It is made openly available. Cycle Streets use the data to highlight issues with lack of cycling infrastructure, which results in safety issues. There is an R package for accessing the source RTA data (<https://cran.r-project.org/web/packages/stats19/vignettes/stats19.html>)
+
+**Are there some other datasets that might be useful for comparisons?**
+
+-   Some measure of the number of cycle journeys in a ward/borough ...
+
+-   Information on road types and speed limits where accidents took place ...
+
+-   Demographic data on who has been involved in the accident (the stats19 package might help here) ...
+
+-   Cycle infrastructure locations and dates built ...
+
+There is a lot of different cycling related datasets on the [TFL website](https://cycling.data.tfl.gov.uk/). Cycle use data appear to be available from 2015 onwards.
+
+## Think about the audience
+
++-----------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------+
+| To think about                                                                    | Notes                                                                                       |
++===================================================================================+=============================================================================================+
+| Can you think of a group of people who might view the visualisations?             | Anyone (policy, delivery, research) interested in active travel.                            |
++-----------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------+
+| Can you think of a specific person who might view the visualizations?             | CL or MW                                                                                    |
++-----------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------+
+| What do want the audience to know or be able to after viewing the visualizations? | Changes over time probably import to the audience. i.e. are things getting better or worse. |
++-----------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------+
+| What expectations might the audience have about visualisations of this data?      | That it will be show geographically ...                                                     |
++-----------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------+
+
+## Ask some questions to be answered by the visualizations
+
+1.  When do the most and least accidents occur? In the course of the day, week, year ... Are there areas of London where the general trends aren't followed?
+
+2.  Are there any trends in terms of the number of accidents occuring? Are there different trends in different areas of London?
+
+3.  Is the increase in number of accidents proportional to the increase in cycling in London? *I assume there has been an increase ...*
+
+4.  Where in London do accidents take place and have any geographic patterns changed over time? Are there any relationships with the locations of cycling infrastructure (see [here](https://github.com/PublicHealthDataGeek/CycleInfraLnd) for an R package for downloading details of cycling infrastructure in London)?
+
+## Summarize the story that the visualizations can help tell
+
+Based on the questions above, the story might go something like this:
+
+-   ...
+
+-   ...
+
+## Create the visualisation/s
+
+### Visualization 1 (question n)
+
++----------+---------------------+-----------------------------------------------+
+| Question | Answer (i.e. title) | Notes to consider in design, chart types etc. |
++==========+=====================+===============================================+
+|          |                     |                                               |
++----------+---------------------+-----------------------------------------------+
+
+```{r}
+
+```
+
+### Visualization x (question n)
+
++----------+---------------------+-----------------------------------------------+
+| Question | Answer (i.e. title) | Notes to consider in design, chart types etc. |
++==========+=====================+===============================================+
+|          |                     |                                               |
++----------+---------------------+-----------------------------------------------+
+
+```{r}
+
+```
+
+### Visualization x (question n)
+
++----------+---------------------+-----------------------------------------------+
+| Question | Answer (i.e. title) | Notes to consider in design, chart types etc. |
++==========+=====================+===============================================+
+|          |                     |                                               |
++----------+---------------------+-----------------------------------------------+
+
+```{r}
+
+```
+
+## Export the visualizations for editing
+
+Some useful image sizes (mm unless stated)
+
++---------------------------------------------------+--------+---------+
+| Purpose                                           | Width  | Height  |
++===================================================+========+=========+
+| Single plot for Twitter                           |        |         |
++---------------------------------------------------+--------+---------+
+|                                                   |        |         |
++---------------------------------------------------+--------+---------+
+|                                                   |        |         |
++---------------------------------------------------+--------+---------+
+
+```{r}
+
+file_folder <- ""
+file_name <- "holding_name"
+
+ggsave(str_c(file_folder, file_name, ".svg"))
+
+# if saving as a pdf use device = cairo_pdf in ggsave 
+```
+
+## Import back in the vizualisation as an image
+
+## Consider how well the overall design works
+
+Based on [Flowing Data](https://flowingdata.com/visualization-for-clarity/designing-for-an-audience/adjusting-for-the-differences/).
+
+Think about each issue (in bold below) as a continuum rather than a check-box.
+
++-----------------------------------------------------+--------------------------------------------------------------+-------+
+| Question to consider                                | Tips                                                         | Notes |
++=====================================================+==============================================================+=======+
+| Are the **encodings** explained?                    | Air on the side of too much explanation ...                  |       |
++-----------------------------------------------------+--------------------------------------------------------------+-------+
+| Is the **context** explained?                       | Titles, subtitles                                            |       |
+|                                                     |                                                              |       |
+|                                                     | Annotate                                                     |       |
+|                                                     |                                                              |       |
+|                                                     | Use colour to highlight                                      |       |
++-----------------------------------------------------+--------------------------------------------------------------+-------+
+| Does it have **readability** like text?             | Think visual hierarchy *(as when laying out text)*           |       |
++-----------------------------------------------------+--------------------------------------------------------------+-------+
+| Do the **aesthetics** align with the topic/message? | Serious topic -\> dark colours, straight-forward chart types |       |
++-----------------------------------------------------+--------------------------------------------------------------+-------+
+
+## Remember it is an iterative process
